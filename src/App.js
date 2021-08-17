@@ -1,39 +1,120 @@
-import { useState } from "react";
-import "./styles.css";
+import { useEffect, useState } from "react";
+import { split } from "apollo-link";
+import { HttpLink } from "apollo-link-http";
+import { WebSocketLink } from "apollo-link-ws";
+import { getMainDefinition } from "apollo-utilities";
+import {
+  ApolloClient,
+  ApolloProvider,
+  gql,
+  InMemoryCache,
+  useSubscription,
+} from "@apollo/client";
+import "./index.css";
 
-export default function App() {
+const wsLink = new WebSocketLink({
+  uri: `ws://localhost:4000/graphql`,
+  options: {
+    reconnect: true,
+  },
+});
+
+const httpLink = new HttpLink({
+  uri: "http://localhost:4000/graphql",
+});
+
+const link = split(
+  // split based on operation type
+  ({ query }) => {
+    const definition = getMainDefinition(query);
+    return (
+      definition.kind === "OperationDefinition" &&
+      definition.operation === "subscription"
+    );
+  },
+  wsLink,
+  httpLink
+);
+
+const client = new ApolloClient({
+  cache: new InMemoryCache(),
+  link,
+});
+
+const TALLY_SUB = gql`
+  subscription onTallyUpdated {
+    tallyUpdated {
+      country
+      gold
+      silver
+      bronze
+    }
+  }
+`;
+
+export default function Container() {
+  return (
+    <ApolloProvider client={client}>
+      <App />
+    </ApolloProvider>
+  );
+}
+
+function App() {
   const [tally, setTally] = useState([]);
   const [error, setError] = useState(undefined);
   const [closeCode, setCloseCode] = useState(undefined);
-  const ws = new WebSocket("ws://localhost:8080");
+  const [opened, setOpened] = useState(false);
+  const [ws, setWs] = useState(undefined);
+  const { data } = useSubscription(TALLY_SUB);
 
-  ws.onmessage = (receivedTally) => {
-    setTally(receivedTally);
-    setError(undefined);
-  };
+  console.log(data);
 
-  ws.onerror = () => {
-    setError("Invalid country");
-  };
+  useEffect(() => {
+    if (!ws) {
+      setWs(new WebSocket("ws://localhost:8080?auth=invalid"));
+    }
+  }, []);
 
-  ws.onclose = (ev) => {
-    setCloseCode(ev.code);
-  };
+  if (ws) {
+    ws.onopen = () => {
+      setOpened(true);
+    };
+
+    ws.onmessage = (e) => {
+      setTally(JSON.parse(e.data));
+      setError(undefined);
+    };
+
+    ws.onerror = () => {
+      setError("Invalid country");
+    };
+
+    ws.onclose = (ev) => {
+      setCloseCode(ev.code);
+    };
+  }
 
   const submitEvent = (medal) => {
-    const country = document.getElementByName("country").value;
+    const country = document.getElementsByName("country")[0].value;
 
     if (!country) {
       return;
     }
 
-    ws.send({
-      country,
-      medal
-    });
+    ws.send(
+      JSON.stringify({
+        country,
+        medal,
+      })
+    );
   };
+
   return (
     <div>
+      {opened && !closeCode && (
+        <div className="success">WebSocket connection established!</div>
+      )}
       <h1>Olympic Medal Tally</h1>
       <table>
         <thead>
@@ -70,13 +151,25 @@ export default function App() {
             {error && <div className="error">{error}</div>}
             <label for="country">Country</label>
             <input name="country" placeholder="eg. Australia" />
-            <button name="gold" onClick={() => submitEvent("gold")}>
+            <button
+              type="button"
+              name="gold"
+              onClick={() => submitEvent("gold")}
+            >
               Gold
             </button>
-            <button name="silver" onClick={() => submitEvent("silver")}>
+            <button
+              type="button"
+              name="silver"
+              onClick={() => submitEvent("silver")}
+            >
               Silver
             </button>
-            <button name="bronze" onClick={() => submitEvent("bronze")}>
+            <button
+              type="button"
+              name="bronze"
+              onClick={() => submitEvent("bronze")}
+            >
               Bronze
             </button>
           </form>
